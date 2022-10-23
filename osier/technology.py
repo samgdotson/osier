@@ -2,6 +2,7 @@ import unyt
 from unyt import MW, hr
 from unyt import unyt_quantity
 from unyt.exceptions import UnitParseError
+from abc import abstractmethod
 
 import numpy as np
 
@@ -625,3 +626,51 @@ class RampingStorageTechnology(RampingTechnology, StorageTechnology):
             default_energy_units,
             ramp_up_rate,
             ramp_down_rate)
+
+
+class VariableTechnology(Technology):
+    """
+    :class:`VariableTechnology` extends the :class:`Technology` class
+    by enabling calculation of power output given a set of weather data.
+    """
+
+    def __init__(
+            self,
+            technology_name,
+            technology_type='production',
+            technology_category='variable',
+            dispatchable=False,
+            renewable=False,
+            capital_cost=0,
+            om_cost_fixed=0,
+            om_cost_variable=0,
+            fuel_cost=0,
+            fuel_type=None,
+            capacity=0,
+            capacity_factor=1,
+            efficiency=1,
+            default_power_units=MW,
+            default_time_units=hr,
+            default_energy_units=None) -> None:
+        super().__init__(
+            technology_name,
+            technology_type,
+            technology_category,
+            dispatchable,
+            renewable,
+            capital_cost,
+            om_cost_fixed,
+            om_cost_variable,
+            fuel_cost,
+            fuel_type,
+            capacity,
+            capacity_factor,
+            efficiency,
+            default_power_units,
+            default_time_units,
+            default_energy_units)
+
+
+    @abstractmethod
+    def generation(self):
+        pass
