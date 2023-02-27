@@ -77,7 +77,34 @@ def get_objective_names(objective_list):
     Examples
     --------
 
-    >>> objectives = [func]
+    >>> objective_list = ['pct_renewable', 
+    ...                    annualized_capital_cost,
+    ...                    annualized_fixed_cost,
+    ...                    total_cost,
+    ...                    functools.partial(annual_emission, emission='co2'),
+    ...                    functools.partial(annual_emission, emission='so2'),
+    ...                    functools.partial(volatility, m=3, delay=100),
+    ...                    functools.partial(per_unit_capacity, attribute='land_use'),
+    ...                    functools.partial(per_unit_capacity, attribute='employment'),
+    ...                    functools.partial(per_unit_energy, attribute='water_use'),
+    ...                    functools.partial(per_unit_energy, attribute='death_rate'),
+    ...                    functools.partial(volatility, m=4, delay=60),
+    ...                    ]
+    
+    >>> get_objective_names(objective_list)
+    
+    >>> ['pct_renewable', 
+    ... 'annualized_capital_cost',
+    ... 'annualized_fixed_cost',
+    ... 'total_cost',
+    ... 'co2',
+    ... 'so2',
+    ... 'volatility_0',
+    ... 'land_use',
+    ... 'employment',
+    ... 'water_use',
+    ... 'death_rate',
+    ... 'volatility_1',]
 
     """
     objective_names = []
@@ -97,3 +124,14 @@ def get_objective_names(objective_list):
         objective_names = rename_duplicates(objective_names)
 
     return objective_names
+
+
+def format_results(osier_model, osier_results):
+    """
+    This function formats the results from an :class:`osier` model
+    run into a :class:`pandas.DataFrame`.
+    """
+
+    col_names = get_objective_names(osier_model.objectives)
+
+    results = osier_results.F
