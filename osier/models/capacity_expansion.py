@@ -3,20 +3,12 @@ import pandas as pd
 from copy import deepcopy
 import dill
 import unyt as u
+from unyt import unyt_array
+import functools
 
 from osier import DispatchModel
 
-from pymoo.core.problem import Problem, ElementwiseProblem
-from pymoo.algorithms.moo.nsga2 import NSGA2
-from pymoo.termination import get_termination
-from pymoo.optimize import minimize
-from pymoo.termination.ftol import MultiObjectiveSpaceTermination
-from pymoo.visualization.scatter import Scatter
-from pymoo.operators.sampling.rnd import FloatRandomSampling
-from pymoo.operators.crossover.sbx import SBX
-from pymoo.operators.mutation.pm import PolynomialMutation
-from pymoo.termination.robust import RobustTermination
-from pymoo.core.parameters import set_params, hierarchical
+from pymoo.core.problem import ElementwiseProblem
 
 
 LARGE_NUMBER = 1e40
@@ -83,12 +75,13 @@ class CapacityExpansion(ElementwiseProblem):
                 prm=0.0,
                 penalty=LARGE_NUMBER,
                 power_units=u.MW, 
-                allow_blackout=True,
+                curtailment=True,
+                allow_blackout=False,
                 **kwargs):
         self.technology_list = deepcopy(technology_list)
         self.demand = demand
         self.prm = prm
-        self.max_demand = demand.max()
+        self.max_demand = float(demand.max())*power_units
         self.avg_lifetime = 25
         self.capacity_requirement = self.max_demand * (1+self.prm)
 
@@ -96,7 +89,13 @@ class CapacityExpansion(ElementwiseProblem):
         self.constraints = constraints
         self.penalty = penalty
         self.power_units = power_units
+        self.curtailment = curtailment
         self.allow_blackout = allow_blackout
+
+        if isinstance(demand, unyt_array):
+            self.power_units = demand.units
+        else:
+            self.power_units = power_units
 
         if solar is not None:
             self.solar_ts = solar / solar.max()
@@ -151,6 +150,7 @@ class CapacityExpansion(ElementwiseProblem):
         model = DispatchModel(technology_list=self.dispatchable_techs,
                               net_demand=net_demand,
                               power_units=self.power_units,
+                              curtailment=self.curtailment,
                               allow_blackout=self.allow_blackout)
         model.solve()
 
@@ -160,12 +160,14 @@ class CapacityExpansion(ElementwiseProblem):
 
             out_obj = []
             for obj_func in self.objectives:
-                out_obj.append(obj_func(self.technology_list, model))
+                out_obj.append(obj_func(technology_list=self.technology_list, 
+                                        solved_dispatch_model=model))
             
             if self.n_constr > 0:
                 out_constr = []
                 for constr_func, val in self.constraints.items():
-                    out_constr.append(constr_func(self.technology_list, model) - val)
+                    out_constr.append(constr_func(technology_list=self.technology_list, 
+                                                  solved_dispatch_model=model) - val)
 
         else:
             out_obj = np.ones(self.n_obj) * self.penalty
