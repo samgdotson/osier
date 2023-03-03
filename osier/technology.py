@@ -2,6 +2,7 @@ import unyt
 from unyt import MW, hr, kg, km, m
 from unyt import unyt_quantity, unyt_array
 from unyt.exceptions import UnitParseError
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -18,8 +19,8 @@ _dim_opts = {'time': hr,
              'specific_mass': kg**-1,
              'specific_power': MW**-1,
              'specific_energy': (MW * hr)**-1,
-             'mass_per_energy':kg*(MW*hr)**-1,
-             'area_per_power': km*MW**-2}
+             'mass_per_energy': kg * (MW * hr)**-1,
+             'area_per_power': km * MW**-2}
 
 _constant_types = (int, float, unyt_quantity)
 _array_types = (unyt.unyt_array, pd.core.series.Series, np.ndarray, list)
@@ -102,15 +103,17 @@ def _validate_quantity(value, dimension):
             assert value.units.same_dimensions_as(exp_dim)
             valid_quantity = value
         except AssertionError:
-            raise TypeError(f"{value} has dimensions {value.units.dimensions}. "
-                            f"Expected {exp_dim.dimensions}")
+            raise TypeError(
+                f"{value} has dimensions {value.units.dimensions}. "
+                f"Expected {exp_dim.dimensions}")
     elif isinstance(value, unyt_array):
         try:
             assert value.units.same_dimensions_as(exp_dim)
             valid_quantity = value
         except AssertionError:
-            raise TypeError(f"{value} has dimensions {value.units.dimensions}. "
-                            f"Expected {exp_dim.dimensions}")
+            raise TypeError(
+                f"{value} has dimensions {value.units.dimensions}. "
+                f"Expected {exp_dim.dimensions}")
     elif isinstance(value, np.ndarray):
         valid_quantity = value * exp_dim
     elif isinstance(value, pd.core.series.Series):
@@ -189,13 +192,26 @@ class Technology(object):
         Specifies the 'usable' fraction of a technology's capacity.
         Default is 1.0, i.e. all of the technology's capacity is
         usable all of the time.
+    capacity_credit : Optional, float
+        Specifies the fraction of a technology's capacity that counts
+        towards reliability requirements. Most frequently used for 
+        renewable technologies. For example, a solar farm might have 
+        a capacity credit of 0.2. This means that in order to meet a 
+        capacity requirement of 1 GW, 1.25 GW of solar would need to 
+        be installed.
+        Default is 1.0, i.e. all of the technology's capacity contributes
+        to capacity requirements.
     co2_rate : float or :class:`unyt.array.unyt_quantity`
-        Specifies the rate at carbon is emitted. May be either lifecycle
-        emissions or from direct use. However, consistency between 
-        technologies is incumbent on the user.
+        Specifies the rate carbon dioxide is emitted during operation.
+        Generally only applicable for fossil fueled plants.
+    lifecycle_co2_rate : float or :class:`unyt.array.unyt_quantity`
+        Specifies the rate of CO2eq emissions over a typical lifetime. 
+        Unless you are reading this in a future where the economy is fully
+        decarbonized, all technologies should have a non-zero value for this 
+        attribute.
     land_intensity : float or :class:`unyt.array.unyt_quantity`
         The amount of land required per unit capacity. May be either lifecycle
-        land use or from direct use. However, consistency between 
+        land use or from direct use. However, consistency between
         technologies is incumbent on the user.
     efficiency : float
         The technology's energy conversion efficiency expressed as
@@ -252,7 +268,9 @@ class Technology(object):
                  fuel_type=None,
                  capacity=0.0,
                  capacity_factor=1.0,
+                 capacity_credit=1.0,
                  co2_rate=0.0,
+                 lifecycle_co2_rate=0.0,
                  land_intensity=0.0,
                  efficiency=1.0,
                  lifetime=25.0,
@@ -280,12 +298,14 @@ class Technology(object):
 
         self.capacity = capacity
         self.capacity_factor = capacity_factor
+        self.capacity_credit = capacity_credit
         self.efficiency = efficiency
         self.capital_cost = capital_cost
         self.om_cost_fixed = om_cost_fixed
         self.om_cost_variable = om_cost_variable
         self.fuel_cost = fuel_cost
         self.co2_rate = co2_rate
+        self.lifecycle_co2_rate = lifecycle_co2_rate
         self.land_intensity = land_intensity
 
     def __repr__(self) -> str:
@@ -370,7 +390,8 @@ class Technology(object):
 
     @capital_cost.setter
     def capital_cost(self, value):
-        self._capital_cost = _validate_quantity(value, dimension="specific_power")
+        self._capital_cost = _validate_quantity(
+            value, dimension="specific_power")
 
     @property
     def om_cost_fixed(self):
@@ -378,7 +399,8 @@ class Technology(object):
 
     @om_cost_fixed.setter
     def om_cost_fixed(self, value):
-        self._om_cost_fixed = _validate_quantity(value, dimension="specific_power")
+        self._om_cost_fixed = _validate_quantity(
+            value, dimension="specific_power")
 
     @property
     def om_cost_variable(self):
@@ -388,7 +410,8 @@ class Technology(object):
             if isinstance(self._om_cost_variable, unyt.unyt_array):
                 return self._om_cost_variable.to(self.unit_energy**-1)
             else:
-                return np.array(self._om_cost_variable) * (self.unit_energy**-1)
+                return np.array(self._om_cost_variable) * \
+                    (self.unit_energy**-1)
 
     @om_cost_variable.setter
     def om_cost_variable(self, value):
@@ -407,11 +430,12 @@ class Technology(object):
 
     @fuel_cost.setter
     def fuel_cost(self, value):
-        self._fuel_cost = _validate_quantity(value, dimension="specific_energy")
+        self._fuel_cost = _validate_quantity(
+            value, dimension="specific_energy")
 
     @property
     def co2_rate(self):
-        return self._co2_rate.to(self.unit_mass*self.unit_energy**-1)
+        return self._co2_rate.to(self.unit_mass * self.unit_energy**-1)
 
     @co2_rate.setter
     def co2_rate(self, value):
@@ -419,11 +443,12 @@ class Technology(object):
 
     @property
     def land_intensity(self):
-        return self._land_intensity.to(self.unit_area*self.unit_power**-1)
+        return self._land_intensity.to(self.unit_area * self.unit_power**-1)
 
     @land_intensity.setter
     def land_intensity(self, value):
-        self._land_intensity = _validate_quantity(value, dimension="area_per_power")
+        self._land_intensity = _validate_quantity(
+            value, dimension="area_per_power")
 
     @property
     def total_capital_cost(self):
@@ -437,30 +462,34 @@ class Technology(object):
     def variable_cost(self):
         """
         Combines the fuel and variable operating costs into a total variable cost
-        associated with technology usage. 
-        
+        associated with technology usage.
+
         Notes
         -----
-        This function will attempt to merge the two values, even if they have 
+        This function will attempt to merge the two values, even if they have
         different sizes and types. Therefore it is recommended that users
         pass values of the same size and type to prevent unexpected behavior.
         """
-        if (isinstance(self.fuel_cost, _constant_types) and isinstance(self.om_cost_variable, _constant_types)):
+        if (isinstance(self.fuel_cost, _constant_types)
+                and isinstance(self.om_cost_variable, _constant_types)):
             return self.fuel_cost + self.om_cost_variable
         elif (isinstance(self.fuel_cost, _array_types) and isinstance(self.om_cost_variable, _constant_types)):
-            return self.fuel_cost + np.ones(len(self.fuel_cost)) * self.om_cost_variable
+            return self.fuel_cost + \
+                np.ones(len(self.fuel_cost)) * self.om_cost_variable
         elif (isinstance(self.fuel_cost, _constant_types) and isinstance(self.om_cost_variable, _array_types)):
-            return self.fuel_cost * np.ones(len(self.om_cost_variable)) + self.om_cost_variable
+            return self.fuel_cost * \
+                np.ones(len(self.om_cost_variable)) + self.om_cost_variable
         elif (isinstance(self.fuel_cost, _constant_types) and isinstance(self.om_cost_variable, _array_types)):
-            return self.fuel_cost * np.ones(len(self.om_cost_variable)) + self.om_cost_variable
+            return self.fuel_cost * \
+                np.ones(len(self.om_cost_variable)) + self.om_cost_variable
         elif (isinstance(self.fuel_cost, _array_types) and isinstance(self.om_cost_variable, _array_types)):
             min_len = min(len(self.fuel_cost), len(self.om_cost_variable))
             return self.fuel_cost[:min_len] + self.om_cost_variable[:min_len]
         else:
-            raise TypeError(f"Fuel cost has type <{type(self.fuel_cost)}>.\n"+
-                            f"OM variable cost has type <{type(self.om_cost_variable)}>.\n"
-                            "One or both of these types are unknown.")
-        
+            raise TypeError(
+                f"Fuel cost has type <{type(self.fuel_cost)}>.\n" +
+                f"OM variable cost has type <{type(self.om_cost_variable)}>.\n"
+                "One or both of these types are unknown.")
 
     def variable_cost_ts(self, size):
         """
@@ -468,7 +497,7 @@ class Technology(object):
         length :attr:`size`.
 
         .. warning::
-            The current implementation will only select the 
+            The current implementation will only select the
             first N values, where N = `size`. It is recommended
             that users only pass the subset of data they wish
             to use.
@@ -493,8 +522,54 @@ class Technology(object):
                 var_cost_ts = self.variable_cost[:size]
                 assert len(var_cost_ts) == size
             except AssertionError as e:
-                raise AssertionError(f"Variable cost data too short ({len(var_cost_ts)} < {size})")
+                raise AssertionError(
+                    f"Variable cost data too short ({len(var_cost_ts)} < {size})")
             return var_cost_ts
+        
+    def to_dataframe(self, cast_to_string=True):
+        """
+        Writes all technology attributes to a :class:`pandas.DataFrame` for export
+        and manipulation.
+        """
+
+        tech_data = OrderedDict()
+        tech_data['technology_name'] = [self.technology_name]
+        tech_data['technology_category'] = [self.technology_category]
+        tech_data['technology_type'] = [self.technology_type]
+        tech_data['dispatchable'] = [str(self.dispatchable)]
+        tech_data['renewable'] = [str(self.renewable)]
+        tech_data['fuel_type'] = [str(self.fuel_type)]
+
+        for key, value in self.__dict__.items():
+            if key in tech_data:
+                continue
+            elif value is None:
+                col = key.strip('_')
+                tech_data[col] = [str(value)] 
+            else:
+                if isinstance(value, unyt.unit_object.Unit):
+                    continue
+                elif isinstance(value, unyt_quantity):
+                    col = f"{key.strip('_')} ({value.units})"
+                    if cast_to_string:
+                        tech_data[col] = ["{:.3e}".format(value.to_value())]
+                    else:
+                        tech_data[col] = [np.round(value.to_value(),10)]
+                elif isinstance(value, (int, float)):
+                    col = key.strip('_')
+                    if cast_to_string:
+                        tech_data[col] = ["{:.3e}".format(value)]
+                    else:
+                        tech_data[col] = [np.round(value,10)]
+                else:
+                    continue
+
+        tech_dataframe = pd.DataFrame(tech_data).set_index('technology_name')
+
+        return tech_dataframe
+                
+            
+
 
 class RampingTechnology(Technology):
     """
@@ -639,4 +714,3 @@ class StorageTechnology(Technology):
             raise AssertionError("Initial storage exceeds storage capacity.")
 
         self._initial_storage = valid_quantity
-
