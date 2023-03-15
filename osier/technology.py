@@ -1,5 +1,5 @@
 import unyt
-from unyt import MW, hr
+from unyt import GW, MW, hr
 from unyt import unyt_quantity
 from unyt.exceptions import UnitParseError
 
@@ -7,11 +7,11 @@ import numpy as np
 
 
 _dim_opts = {'time': hr,
-             'power': MW,
-             'energy': MW * hr,
+             'power': GW,
+             'energy': GW * hr,
              'specific_time': hr**-1,
-             'specific_power': MW**-1,
-             'specific_energy': (MW * hr)**-1}
+             'specific_power': GW**-1,
+             'specific_energy': (GW * hr)**-1}
 
 
 def _validate_unit(value, dimension):
@@ -216,7 +216,7 @@ class Technology(object):
                  capacity_factor=1.0,
                  efficiency=1.0,
                  lifetime=25.0,
-                 default_power_units=MW,
+                 default_power_units=GW,
                  default_time_units=hr,
                  default_energy_units=None) -> None:
 

@@ -81,6 +81,7 @@ class CapacityExpansion(ElementwiseProblem):
                 wind=None, 
                 prm=0.0,
                 penalty=LARGE_NUMBER, 
+                allow_blackout=False,
                 **kwargs):
         self.technology_list = deepcopy(technology_list)
         self.demand = demand
@@ -92,6 +93,7 @@ class CapacityExpansion(ElementwiseProblem):
         self.objectives = objectives
         self.constraints = constraints
         self.penalty = penalty
+        self.allow_blackout = allow_blackout
 
         if solar is not None:
             self.solar_ts = solar / solar.max()
@@ -144,7 +146,8 @@ class CapacityExpansion(ElementwiseProblem):
                     - solar_gen
         
         model = DispatchModel(technology_list=self.dispatchable_techs,
-                              net_demand=net_demand)
+                              net_demand=net_demand,
+                              allow_blackout=self.allow_blackout)
         model.solve()
 
         if model.results is not None:
