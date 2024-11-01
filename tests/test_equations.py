@@ -7,7 +7,7 @@ import sys
 import functools
 
 if "win32" in sys.platform:
-    solver = 'cbc'
+    solver = 'highs'
 elif "linux" in sys.platform:
     solver = "cbc"
 else:

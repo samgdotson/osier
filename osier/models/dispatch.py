@@ -1,9 +1,8 @@
 import pandas as pd
 import numpy as np
-import pyomo.environ as pe
-import pyomo.opt as po
-from pyomo.environ import ConcreteModel
-from unyt import unyt_array, hr, MW, kW, GW
+import xarray as xr
+from linopy import Model
+from unyt import unyt_array, hr, MW, kW, GW, kWh
 import itertools as it
 from osier import Technology
 from osier.technology import _validate_quantity, _validate_unit
@@ -19,7 +18,7 @@ _freq_opts = {'D': 'day',
               'T': 'minute'}
 LARGE_NUMBER = 1e20
 MEDIUM_NUMBER = 1e10
-BLACKOUT_COST = 10 * (1 / (kW * hr))  # M$/kWh
+BLACKOUT_COST = 10 * (1 / kWh)  # M$/kWh
 
 
 curtailment_tech = Technology(technology_name='Curtailment',
@@ -216,7 +215,7 @@ class DispatchModel():
         self.oversupply = oversupply
         self.undersupply = undersupply
         self.penalty = penalty
-        self.model = ConcreteModel()
+        self.model = Model()
         self.solver = solver
         self.results = None
         self.objective = None
@@ -247,6 +246,8 @@ class DispatchModel():
             sync_list,
             unit_power=self.power_units,
             unit_time=self.time_delta.units)
+        
+        self.technology_list = [t for t in self.technology_list if t.dispatchable]
 
         logging.basicConfig(level=verbosity, format='%(message)s')
 
@@ -313,8 +314,8 @@ class DispatchModel():
 
     @property
     def efficiency_dict(self):
-        capacity_set = [t.efficiency for t in self.technology_list]
-        return dict(zip(self.tech_set, capacity_set))
+        efficiency_set = [t.efficiency for t in self.technology_list]
+        return dict(zip(self.tech_set, efficiency_set))
 
     @property
     def time_set(self):
@@ -388,161 +389,159 @@ class DispatchModel():
         caps = unyt_array([t.capacity for t in self.technology_list])
         return caps.max().to_value()
 
-    def _create_model_indices(self):
-        self.model.Generators = pe.Set(initialize=self.tech_set, ordered=True)
-        self.model.Time = pe.Set(initialize=self.time_set, ordered=True)
-        if len(self.ramping_techs) > 0:
-            self.model.RampingTechs = pe.Set(initialize=self.ramping_techs,
-                                             ordered=True,
-                                             within=self.model.Generators)
-        if len(self.storage_techs) > 0:
-            self.model.StorageTech = pe.Set(initialize=self.storage_techs,
-                                            ordered=True,
-                                            within=self.model.Generators)
 
     def _create_demand_param(self):
-        self.model.Demand = pe.Param(self.model.Time, initialize=dict(
-            zip(self.model.Time, np.array(self.net_demand))))
+        self.demand = dict(zip(self.time_set, np.array(self.net_demand)))
+
 
     def _create_cost_param(self):
-        self.model.VariableCost = pe.Param(
-            self.model.Generators,
-            self.model.Time,
-            initialize=self.cost_params)
+        self.variable_cost = self.cost_params
 
-    def _create_ramping_params(self):
-        self.model.ramp_up = pe.Param(
-            self.model.RampingTechs, initialize=self.ramp_up_params)
-        self.model.ramp_down = pe.Param(
-            self.model.RampingTechs, initialize=self.ramp_down_params)
 
-    def _create_max_storage_params(self):
-        self.model.storage_capacity = pe.Param(
-            self.model.StorageTech, initialize=self.max_storage_params
+    def _create_model_parameters(self):
+        self.model.add_parameters(
+            ramp_up=self.ramp_up_params,
+            ramp_down=self.ramp_down_params,
+            storage_capacity=self.max_storage_params,
+            initial_storage=self.initial_storage_params
         )
 
-    def _create_init_storage_params(self):
-        self.model.initial_storage = pe.Param(
-            self.model.StorageTech, initialize=self.initial_storage_params
-        )
+
+    # def _create_model_variables(self):
+    #     breakpoint()
+    #     self.model.add_variables(
+    #         'x', dims=(self.tech_set, self.time_set),
+    #         lower=self.lower_bound, upper=self.upper_bound,
+    #     )
+
+    #     if len(self.storage_techs) > 0:
+    #         self.model.add_variables(
+    #             'storage_level', dims=(self.storage_techs, self.time_set),
+    #             lower=self.lower_bound, upper=self.storage_upper_bound,
+    #         )
+    #         self.model.add_variables(
+    #             'charge', dims=(self.storage_techs, self.time_set),
+    #             lower=self.lower_bound, upper=self.storage_upper_bound,
+    #         )
+
 
     def _create_model_variables(self):
-        self.model.x = pe.Var(self.model.Generators, self.model.Time,
-                              domain=pe.NonNegativeReals,
-                              bounds=(self.lower_bound, self.upper_bound))
+        lower_bounds = xr.DataArray(self.lower_bound, 
+                                    dims=('tech_set', 'time_set'), 
+                                    coords={'tech_set': self.tech_set, 
+                                            'time_set': self.time_set})
+        upper_bounds = xr.DataArray(self.upper_bound, 
+                                    dims=('tech_set', 'time_set'), 
+                                    coords={'tech_set': self.tech_set, 
+                                            'time_set': self.time_set})
+        breakpoint()
+        self.model.add_variables(name='x', 
+                                #  dims=(self.tech_set, self.time_set), 
+                                 lower=lower_bounds, upper=upper_bounds)
 
         if len(self.storage_techs) > 0:
-            self.model.storage_level = pe.Var(
-                self.model.StorageTech,
-                self.model.Time,
-                domain=pe.NonNegativeReals,
-                bounds=(
-                    self.lower_bound,
-                    self.storage_upper_bound))
-            self.model.charge = pe.Var(self.model.StorageTech, self.model.Time,
-                                       domain=pe.NonNegativeReals,
-                                       bounds=(self.lower_bound,
-                                               self.upper_bound))
+            storage_lower_bounds = xr.DataArray(self.lower_bound, 
+                                                dims=('storage_techs', 'time_set'), 
+                                                coords={'storage_techs': self.storage_techs, 
+                                                        'time_set': self.time_set})
+            storage_upper_bounds = xr.DataArray(self.storage_upper_bound, 
+                                                dims=('storage_techs', 'time_set'), 
+                                                coords={'storage_techs': self.storage_techs, 
+                                                        'time_set': self.time_set})
+
+            self.model.add_variables(name='storage_level', 
+                                     lower=storage_lower_bounds, 
+                                     upper=storage_upper_bounds)
+            self.model.add_variables(name='charge', 
+                                     lower=storage_lower_bounds, 
+                                     upper=storage_upper_bounds)
+
+
 
     def _objective_function(self):
-        expr = sum(self.model.VariableCost[g, t] * self.model.x[g, t]
-                   for g in self.model.Generators for t in self.model.Time)
+        expr = sum(self.variable_cost[g, t] * self.model.variables['x'][g, t]
+                for g in self.tech_set for t in self.time_set)
         if len(self.storage_techs) > 0:
-            expr += sum(self.model.x[s, t] + self.model.charge[s, t]
-                        for s in self.model.StorageTech
-                        for t in self.model.Time) * self.penalty
-        self.model.objective = pe.Objective(sense=pe.minimize, expr=expr)
+            expr += sum(self.model.variables['x'][s, t] + self.model.variables['charge'][s, t]
+                        for s in self.storage_techs
+                        for t in self.time_set) * self.penalty
+        self.model.objective = self.model.minimize(expr)
+
 
     def _supply_constraints(self):
-        self.model.oversupply = pe.ConstraintList()
-        self.model.undersupply = pe.ConstraintList()
-        for t in self.model.Time:
-            generation = sum(self.model.x[g, t] for g in self.model.Generators
-                             if g != 'Curtailment')
+        for t in self.time_set:
+            generation = sum(self.model.x[g, t] for g in self.tech_set if g != 'Curtailment')
             if self.curtailment:
                 generation -= self.model.x['Curtailment', t]
             if len(self.storage_techs) > 0:
-                generation -= sum(self.model.charge[s, t]
-                                  for s in self.model.StorageTech)
-            over_demand = self.model.Demand[t] * (1 + self.oversupply)
-            under_demand = self.model.Demand[t] * (1 - self.undersupply)
-            self.model.oversupply.add(generation <= over_demand)
-            self.model.undersupply.add(generation >= under_demand)
+                generation -= sum(self.model.charge[s, t] for s in self.storage_techs)
+            over_demand = self.demand[t] * (1 + self.oversupply)
+            under_demand = self.demand[t] * (1 - self.undersupply)
+            self.model.add_constraints(
+                oversupply=(generation <= over_demand),
+                undersupply=(generation >= under_demand)
+            )
 
     def _generation_constraint(self):
-        self.model.gen_limit = pe.ConstraintList()
-        for g in self.model.Generators:
-            unit_capacity = (
-                self.capacity_dict[g] *
-                self.time_delta).to_value()
-
-            for t in self.model.Time:
-                unit_generation = self.model.x[g, t]
-                self.model.gen_limit.add(unit_generation <= unit_capacity)
+        for g in self.tech_set:
+            unit_capacity = (self.capacity_dict[g] * self.time_delta).to_value()
+            for t in self.time_set:
+                unit_generation = self.model['x'][g, t]
+                self.model.add_constraints(
+                    gen_limit=(unit_generation <= unit_capacity)
+                )
 
     def _ramping_constraints(self):
-        self.model.ramp_up_limit = pe.ConstraintList()
-        self.model.ramp_down_limit = pe.ConstraintList()
-
-        for r in self.model.RampingTechs:
-            ramp_up = self.model.ramp_up[r]
-            ramp_down = self.model.ramp_down[r]
-            for t in self.model.Time:
-                if t != self.model.Time.first():
-                    t_prev = self.model.Time.prev(t)
+        for r in self.ramping_techs:
+            ramp_up = self.model['ramp_up'][r]
+            ramp_down = self.model['ramp_down'][r]
+            for t in self.time_set:
+                if t != self.time_set[0]:
+                    t_prev = self.time_set[t - 1]
                     previous_gen = self.model.x[r, t_prev]
                     current_gen = self.model.x[r, t]
-                    delta_power = (current_gen - previous_gen) / \
-                        self.time_delta.to_value()
-                    self.model.ramp_up_limit.add(delta_power <= ramp_up)
-                    self.model.ramp_down_limit.add(delta_power >= -ramp_down)
+                    delta_power = (current_gen - previous_gen) / self.time_delta.to_value()
+                    self.model.add_constraints(
+                        ramp_up_limit=(delta_power <= ramp_up),
+                        ramp_down_limit=(delta_power >= -ramp_down)
+                    )
 
     def _storage_constraints(self):
-        self.model.discharge_limit = pe.ConstraintList()
-        self.model.charge_limit = pe.ConstraintList()
-        self.model.charge_rate_limit = pe.ConstraintList()
-        self.model.storage_limit = pe.ConstraintList()
-        self.model.set_storage = pe.ConstraintList()
-        for s in self.model.StorageTech:
+        for s in self.storage_techs:
             efficiency = self.efficiency_dict[s]
             storage_cap = self.model.storage_capacity[s]
-            unit_capacity = (
-                self.capacity_dict[s] *
-                self.time_delta).to_value()
+            unit_capacity = (self.capacity_dict[s] * self.time_delta).to_value()
             initial_storage = self.model.initial_storage[s]
-            for t in self.model.Time:
-                self.model.charge_rate_limit.add(
-                    self.model.charge[s, t] <= unit_capacity)
-                if t == self.model.Time.first():
-                    self.model.set_storage.add(self.model.storage_level[s, t]
-                                               == initial_storage)
-                    self.model.discharge_limit.add(
-                        self.model.x[s, t] <= initial_storage)
-                    self.model.charge_limit.add(self.model.charge[s, t]
-                                                <= storage_cap
-                                                - initial_storage)
-                else:
-                    t_prev = self.model.Time.prev(t)
+            for t in self.time_set:
+                self.model.add_constraints(
+                    charge_rate_limit=(self.model.charge[s, t] <= unit_capacity)
+                )
+                if t == self.time_set[0]:
+                    self.model.add_constraints(
+                        set_storage=(self.model.storage_level[s, t] == initial_storage)
+                    )
+                self.model.add_constraints(
+                    discharge_limit=(self.model.x[s, t] <= initial_storage),
+                    charge_limit=(self.model.charge[s, t] <= storage_cap - initial_storage)
+                )
+                if t != self.time_set[0]:
+                    t_prev = self.time_set[t - 1]
                     previous_storage = self.model.storage_level[s, t_prev]
                     current_discharge = self.model.x[s, t]
                     current_charge = self.model.charge[s, t]
-                    self.model.set_storage.add(
-                        self.model.storage_level[s, t]
-                        == previous_storage
-                        + np.sqrt(efficiency) * current_charge
-                        - np.sqrt(efficiency) * current_discharge
+                    self.model.add_constraints(
+                        set_storage=(self.model.storage_level[s, t] == previous_storage + np.sqrt(efficiency) * current_charge - np.sqrt(efficiency) * current_discharge),
+                        charge_limit=(np.sqrt(efficiency) * current_charge <= storage_cap - previous_storage),
+                        discharge_limit=(current_discharge <= previous_storage),
+                        storage_limit=(self.model.storage_level[s, t] <= storage_cap)
                     )
-                    self.model.charge_limit.add(
-                        np.sqrt(efficiency) * current_charge
-                        <= storage_cap - previous_storage)
-                    self.model.discharge_limit.add(
-                        current_discharge <= previous_storage)
-                self.model.storage_limit.add(
-                    self.model.storage_level[s, t] <= storage_cap)
 
     def _write_model_equations(self):
 
-        self._create_model_indices()
+        # self._create_model_indices()
+        # self._create_demand_param()
+        # self._create_cost_param()
+        # self._create_model_parameters()
         self._create_demand_param()
         self._create_cost_param()
         self._create_model_variables()
@@ -550,64 +549,53 @@ class DispatchModel():
         self._supply_constraints()
         self._generation_constraint()
         if len(self.ramping_techs) > 0:
-            self._create_ramping_params()
+            # self._create_ramping_params()
             self._ramping_constraints()
         if len(self.storage_techs) > 0:
-            self._create_init_storage_params()
-            self._create_max_storage_params()
+            # self._create_init_storage_params()
+            # self._create_max_storage_params()
             self._storage_constraints()
         self.model_initialized = True
 
     def _format_results(self):
-        df = pd.DataFrame(index=self.model.Time)
-        for g in self.model.Generators:
+        df = pd.DataFrame(index=self.time_set)
+        for g in self.tech_set:
             if g == 'Curtailment':
-                df[g] = [-1 * self.model.x[g, t].value for t in self.model.Time]
+                df[g] = [-1 * self.model.x[g, t].value for t in self.time_set]
             else:
-                df[g] = [self.model.x[g, t].value for t in self.model.Time]
-
+                df[g] = [self.model.x[g, t].value for t in self.time_set]
         if len(self.storage_techs) > 0:
-            for s in self.model.StorageTech:
-                df[f"{s}_charge"] = [-1 * self.model.charge[s, t].value
-                                     for t in self.model.Time]
-                df[f"{s}_level"] = [self.model.storage_level[s, t].value
-                                    for t in self.model.Time]
-
-        df["Cost"] = np.array(sum(self.model.VariableCost[g, t] * self.model.x[g, t].value
-                                  for g in self.model.Generators) for t in self.model.Time)
-
+            for s in self.storage_techs:
+                df[f"{s}_charge"] = [-1 * self.model.charge[s, t].value for t in self.time_set]
+                df[f"{s}_level"] = [self.model.storage_level[s, t].value for t in self.time_set]
+        df["Cost"] = np.array([sum(self.variable_cost[g, t] * self.model.x[g, t].value 
+                                   for g in self.tech_set) for t in self.time_set])
         return df
 
     def solve(self, solver=None):
         """
         Executes the model solve. Model equations are written at the
         time the method is called.
-
         Parameters
         ----------
         solver : str
             Indicates which solver to use. If no solver is specified,
             the default :attr:`DispatchModel.solver` attribute is used.
-            Default is ['cplex'].
+            Default is ['cbc'].
         """
         if not self.model_initialized:
             self._write_model_equations()
-
         if solver:
-            optimizer = po.SolverFactory(solver)
-        else:
-            optimizer = po.SolverFactory(self.solver)
-
-        results = optimizer.solve(self.model, tee=self.verbose)
+            self.solver = solver
+        results = self.model.solve(solver=self.solver, verbose=self.verbose)
         try:
-            self.objective = self.model.objective()
+            self.objective = self.model.objective_value
         except ValueError:
             if self.verbosity <= 30:
-                warnings.warn(
-                    f"Infeasible or no solution. Objective set to {LARGE_NUMBER}")
+                warnings.warn(f"Infeasible or no solution. Objective set to {LARGE_NUMBER}")
             self.objective = LARGE_NUMBER
-
         try:
             self.results = self._format_results()
         except TypeError:
             self.results = None
+
